@@ -29,10 +29,15 @@ class RestartResult:
     no_internet: str = ""
     duration_sec: float = 0.0
     dialogs_seen: list[str] = field(default_factory=list)
+    failed_step: str = ""  # Step mana yang macet (kalau gagal)
 
 
 class AcsisAutomationError(Exception):
     """Error umum waktu automation jalan."""
+
+    def __init__(self, message: str, step: str = ""):
+        super().__init__(message)
+        self.step = step
 
 
 class AcsisClient:
@@ -51,6 +56,7 @@ class AcsisClient:
         *,
         headless: bool = True,
         debug_screenshot_dir: Optional[str] = None,
+        on_progress=None,  # callable(str) → optional, dipanggil tiap step
     ) -> None:
         if not totp_secret:
             raise ValueError("TOTP secret kosong. Isi ACSIS_TOTP_SECRET di .env")
@@ -61,6 +67,7 @@ class AcsisClient:
         self.totp = pyotp.TOTP(totp_secret.replace(" ", "").replace("=", ""))
         self.headless = headless
         self.debug_dir = debug_screenshot_dir or ""
+        self.on_progress = on_progress or (lambda msg: None)
 
     # ------------------------------------------------------------------ public
     async def restart_ont(self, no_internet: str) -> RestartResult:
@@ -147,6 +154,7 @@ class AcsisClient:
         page.on("dialog", lambda d: asyncio.create_task(handler(d)))
 
     async def _login(self, page: Page) -> None:
+        self.on_progress("🔐 Membuka halaman login...")
         logger.info("Membuka halaman login...")
         await page.goto(f"{self.base_url}/login", wait_until="domcontentloaded")
         await self._maybe_screenshot(page, "01_login")
@@ -188,12 +196,15 @@ class AcsisClient:
             await page.wait_for_url(re.compile(r"/otp($|\?)"), timeout=15_000)
         except PlaywrightTimeoutError as e:
             raise AcsisAutomationError(
-                "Gagal masuk ke halaman OTP. Cek username/password/dropdown."
+                "Gagal masuk ke halaman OTP. Cek username/password/dropdown.",
+                step="login",
             ) from e
 
+        self.on_progress("🔐 Login OK, masuk halaman OTP.")
         logger.info("Berhasil masuk halaman OTP.")
 
     async def _submit_otp(self, page: Page) -> None:
+        self.on_progress("🔢 Generate & submit OTP...")
         otp_code = self.totp.now()
         logger.info("OTP di-generate (disembunyikan di log).")
 
@@ -228,12 +239,15 @@ class AcsisClient:
             await page.wait_for_url(re.compile(r"/home($|\?)"), timeout=15_000)
         except PlaywrightTimeoutError as e:
             raise AcsisAutomationError(
-                "Gagal masuk ke halaman Home. OTP kemungkinan salah / expired."
+                "Gagal masuk ke halaman Home. OTP kemungkinan salah / expired.",
+                step="otp",
             ) from e
 
+        self.on_progress("✅ OTP OK, masuk halaman Home.")
         logger.info("Berhasil masuk halaman Home.")
 
     async def _search_internet(self, page: Page, no_internet: str) -> None:
+        self.on_progress(f"🔍 Cari data ONT {no_internet}...")
         # Tunggu form pencarian muncul.
         no_inet_input = page.locator(
             'input[placeholder*="internet" i]:visible, '
@@ -253,13 +267,16 @@ class AcsisClient:
         except PlaywrightTimeoutError as e:
             raise AcsisAutomationError(
                 f"Data fiber untuk {no_internet} tidak muncul. "
-                "Cek No Internet — mungkin salah / tidak ditemukan."
+                "Cek No Internet — mungkin salah / tidak ditemukan.",
+                step="search",
             ) from e
 
         await self._maybe_screenshot(page, "05_fiber_loaded")
+        self.on_progress("📊 Data fiber ketemu, mau restart...")
         logger.info("Fiber info termuat untuk %s.", no_internet)
 
     async def _trigger_restart(self, page: Page, dialogs: list[str]) -> None:
+        self.on_progress("⚡ Klik Restart ONT...")
         # Klik menu "Restart ONT" di sidebar kiri.
         await page.get_by_text(re.compile(r"^Restart ONT$", re.I)).first.click()
         await self._maybe_screenshot(page, "06_restart_clicked")
@@ -273,7 +290,8 @@ class AcsisClient:
             await asyncio.sleep(0.5)
         else:
             raise AcsisAutomationError(
-                "Tidak menerima pop-up hasil restart dalam 30 detik."
+                "Tidak menerima pop-up hasil restart dalam 30 detik.",
+                step="restart",
             )
 
     def _interpret(

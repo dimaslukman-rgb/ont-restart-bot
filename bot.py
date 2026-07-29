@@ -42,7 +42,7 @@ def is_authorized(user_id: int) -> bool:
     return not ALLOWED_USERS or user_id in ALLOWED_USERS
 
 
-def build_client() -> AcsisClient:
+def build_client(on_progress=None):
     try:
         return AcsisClient(
             base_url=os.environ.get("ACSIS_BASE_URL", "https://acs-ibooster.telkom.co.id"),
@@ -52,6 +52,7 @@ def build_client() -> AcsisClient:
             totp_secret=os.environ["ACSIS_TOTP_SECRET"],
             headless=os.environ.get("ACSIS_HEADLESS", "true").lower() != "false",
             debug_screenshot_dir=os.environ.get("DEBUG_SCREENSHOT_DIR") or None,
+            on_progress=on_progress,
         )
     except KeyError as e:
         raise SystemExit(
@@ -67,6 +68,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "👋 *ONT Restart Bot*\n\n"
         "Perintah yang tersedia:\n"
         "• `/restart <no_internet>` — restart ONT\n"
+        "• `/test` — smoke test Playwright (kalo restart mentok)\n"
         "• `/help` — contoh & tips\n"
         "• `/myid` — cek Telegram user ID kamu\n\n"
         "Bot ini nge-drive browser headless ke ACSIS, "
@@ -128,12 +130,23 @@ async def cmd_restart(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         )
         await ctx.application.bot.send_chat_action(chat_id, ChatAction.TYPING)
 
+        # Heartbeat: tiap step kasih update ke Telegram
+        async def on_progress(msg: str) -> None:
+            try:
+                await status.edit_text(
+                    f"⏳ *Restart ONT `{no_internet}`...*\n{msg}",
+                    parse_mode="Markdown",
+                )
+            except Exception:  # noqa: BLE001
+                pass  # Gagal edit (rate limit?) — skip
+
         try:
-            client = build_client()
+            client = build_client(on_progress=on_progress)
             result: RestartResult = await client.restart_ont(no_internet)
         except AcsisAutomationError as e:
-            logger.warning("AcsisAutomationError: %s", e)
-            return await status.edit_text(f"❌ Gagal: {e}")
+            logger.warning("AcsisAutomationError @ %s: %s", e.step, e)
+            step_hint = f" (gagal di step: {e.step})" if e.step else ""
+            return await status.edit_text(f"❌ Gagal{step_hint}: {e}")
         except MemoryError:
             logger.exception("Out of memory saat restart")
             return await status.edit_text(
@@ -153,8 +166,47 @@ async def cmd_restart(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 f"⏱ Durasi: {result.duration_sec} detik"
             )
         else:
-            text = f"❌ *Gagal* restart ONT `{result.no_internet}`.\n{result.message}"
+            step_hint = f" (gagal di step: {result.failed_step})" if result.failed_step else ""
+            text = f"❌ *Gagal* restart ONT `{result.no_internet}`{step_hint}.\n{result.message}"
         await status.edit_text(text, parse_mode="Markdown")
+
+
+async def cmd_test(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Smoke test: cek apakah Playwright bisa jalan di environment ini."""
+    if not is_authorized(update.effective_user.id):
+        return await update.message.reply_text("Akses ditolak.")
+
+    status = await update.message.reply_text("🧪 Test Playwright... buka browser headless ke about:blank")
+    try:
+        from playwright.async_api import async_playwright
+        import time as _t
+        started = _t.monotonic()
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"],
+            )
+            try:
+                page = await browser.new_page()
+                await page.goto("about:blank")
+                title = await page.title()
+            finally:
+                await browser.close()
+        duration = _t.monotonic() - started
+        await status.edit_text(
+            f"✅ Test OK! Playwright jalan.\n"
+            f"⏱ Durasi: {duration:.2f}s\n"
+            f"Page title: `{title}`\n\n"
+            f"Kalo /restart masih gagal setelah ini, masalahnya bukan Playwright — "
+            f"tapi selector ACSIS / network / TOTP."
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Test gagal")
+        await status.edit_text(
+            f"❌ Test GAGAL: {e}\n\n"
+            f"Kemungkinan: OOM (free tier 512 MB kurang), "
+            f"atau Playwright Chromium belum terinstall."
+        )
 
 
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -185,6 +237,7 @@ def main() -> None:
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CommandHandler("restart", cmd_restart))
+    app.add_handler(CommandHandler("test", cmd_test))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_unhandled))
 
