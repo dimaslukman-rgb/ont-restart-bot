@@ -172,41 +172,71 @@ async def cmd_restart(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_test(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Smoke test: cek apakah Playwright bisa jalan di environment ini."""
+    """Smoke test ringan: cek environment (gak launch browser)."""
     if not is_authorized(update.effective_user.id):
         return await update.message.reply_text("Akses ditolak.")
 
-    status = await update.message.reply_text("🧪 Test Playwright... buka browser headless ke about:blank")
+    status = await update.message.reply_text("🧪 Test environment...")
+    checks: list[str] = []
+
+    # 1. Cek Python
+    import sys
+    checks.append(f"✅ Python: {sys.version.split()[0]}")
+
+    # 2. Cek env vars penting
+    required = ["TELEGRAM_BOT_TOKEN", "ACSIS_USERNAME", "ACSIS_PASSWORD", "ACSIS_TOTP_SECRET"]
+    missing = [v for v in required if not os.environ.get(v)]
+    if missing:
+        checks.append(f"❌ Env var hilang: {', '.join(missing)}")
+    else:
+        checks.append("✅ Semua env var ter-set")
+
+    # 3. Cek Playwright installed
     try:
-        from playwright.async_api import async_playwright
-        import time as _t
-        started = _t.monotonic()
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"],
-            )
-            try:
-                page = await browser.new_page()
-                await page.goto("about:blank")
-                title = await page.title()
-            finally:
-                await browser.close()
-        duration = _t.monotonic() - started
-        await status.edit_text(
-            f"✅ Test OK! Playwright jalan.\n"
-            f"⏱ Durasi: {duration:.2f}s\n"
-            f"Page title: `{title}`\n\n"
-            f"Kalo /restart masih gagal setelah ini, masalahnya bukan Playwright — "
-            f"tapi selector ACSIS / network / TOTP."
-        )
+        import playwright  # noqa: F401
+        checks.append(f"✅ Playwright installed (v{playwright.__version__})")
+    except ImportError:
+        checks.append("❌ Playwright BELUM terinstall")
+
+    # 4. Cek pyotp
+    try:
+        import pyotp  # noqa: F401
+        checks.append(f"✅ pyotp installed (v{pyotp.__version__})")
+    except ImportError:
+        checks.append("❌ pyotp BELUM terinstall")
+
+    # 5. Test TOTP generation
+    try:
+        totp = pyotp.TOTP(os.environ["ACSIS_TOTP_SECRET"].replace(" ", "").replace("=", ""))
+        code = totp.now()
+        checks.append(f"✅ TOTP generation OK (sample: {code[:2]}****)")
     except Exception as e:  # noqa: BLE001
-        logger.exception("Test gagal")
-        await status.edit_text(
-            f"❌ Test GAGAL: {e}\n\n"
-            f"Kemungkinan: OOM (free tier 512 MB kurang), "
-            f"atau Playwright Chromium belum terinstall."
-        )
+        checks.append(f"❌ TOTP generation gagal: {e}")
+
+    # 6. Network test ke ACSIS
+    try:
+        import urllib.request
+        req = urllib.request.Request("https://acs-ibooster.telkom.co.id", method="HEAD")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            checks.append(f"✅ ACSIS reachable (HTTP {r.status})")
+    except Exception as e:  # noqa: BLE001
+        checks.append(f"❌ ACSIS unreachable: {e}")
+
+    # 7. Memory check (kalo bisa)
+    try:
+        import resource  # type: ignore
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        mb = usage.ru_maxrss / 1024
+        checks.append(f"ℹ️ Memory usage: {mb:.0f} MB")
+    except Exception:  # noqa: BLE001
+        pass  # Windows gak support resource module
+
+    await status.edit_text(
+        "🧪 *Environment check*\n\n" + "\n".join(checks) +
+        "\n\n_Test ini lightweight, gak launch browser. "
+        "Kalo semua ✅ tapi /restart masih gagal, masalahnya di OOM / selector._",
+        parse_mode="Markdown",
+    )
 
 
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
