@@ -1,0 +1,35 @@
+# Nixpacks (alternative to Dockerfile) - used if Railway doesn't pick up Dockerfile
+# File ini di-rename ke `nixpacks.toml` kalo mau pake Nixpacks builder.
+#
+# Catatan: Nixpacks kurang ideal buat Playwright. Dockerfile di project ini
+# udah include image Playwright official yang udah ada Chromium-nya, jadi
+# lebih reliable. Tetapin pake Dockerfile.
+#
+# Steps build nixpacks default:
+#   1. Detect Python -> install requirements.txt
+#   2. Railway auto-install Playwright browsers? BELUM. Butuh install manual.
+
+[phases.setup]
+aptPkgs = [
+  "python3-pip",
+  "tini",
+  "fonts-liberation",
+  "libnss3",
+  "libatk-bridge2.0-0",
+  "libxkbcommon0",
+  "libgtk-3-0",
+  "libgbm1",
+  "libasound2",
+  "chromium",
+  "chromium-driver"
+]
+
+[phases.install]
+cmds = [
+  "pip install --no-cache-dir --upgrade pip",
+  "pip install --no-cache-dir -r requirements.txt",
+  "python -m playwright install --with-deps chromium"
+]
+
+[start]
+cmd = "python -u bot.py"
