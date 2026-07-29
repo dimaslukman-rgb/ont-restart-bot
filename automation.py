@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import os
 import re
@@ -74,7 +75,25 @@ class AcsisClient:
         started = time.monotonic()
         dialogs: list[str] = []
         async with async_playwright() as p:
-            browser: Browser = await p.chromium.launch(headless=self.headless)
+            # Memory-efficient Chromium launch. Railway free tier = 512 MB,
+            # Playwright default args bisa spike 800 MB+ dan OOM-kill.
+            browser: Browser = await p.chromium.launch(
+                headless=self.headless,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",  # /dev/shm kecil di container
+                    "--disable-gpu",
+                    "--disable-software-rasterizer",
+                    "--disable-extensions",
+                    "--disable-background-networking",
+                    "--disable-default-apps",
+                    "--disable-sync",
+                    "--disable-translate",
+                    "--no-first-run",
+                    "--no-zygote",
+                    "--single-process",  # Hemat ~30% memory (trade-off: kurang stabil)
+                ],
+            )
             try:
                 context = await self._new_context(browser)
                 page = await context.new_page()
@@ -87,11 +106,18 @@ class AcsisClient:
                     await self._trigger_restart(page, dialogs)
                 finally:
                     await self._maybe_screenshot(page, "final")
-                    await context.close()
+                    try:
+                        await context.close()
+                    except Exception:  # noqa: BLE001
+                        logger.warning("Gagal close context (mungkin udah crash)")
             finally:
-                await browser.close()
+                try:
+                    await browser.close()
+                except Exception:  # noqa: BLE001
+                    logger.warning("Gagal close browser (mungkin udah crash)")
 
         duration = time.monotonic() - started
+        gc.collect()  # Force GC buat release memory sebelum exit
         return self._interpret(no_internet, dialogs, duration)
 
     # ------------------------------------------------------------------ helpers

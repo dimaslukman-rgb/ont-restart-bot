@@ -134,9 +134,18 @@ async def cmd_restart(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except AcsisAutomationError as e:
             logger.warning("AcsisAutomationError: %s", e)
             return await status.edit_text(f"❌ Gagal: {e}")
+        except MemoryError:
+            logger.exception("Out of memory saat restart")
+            return await status.edit_text(
+                "❌ Bot ke-kill karena memory habis (kemungkinan OOM). "
+                "Coba lagi, atau upgrade Railway ke Hobby plan $5/bln (8GB RAM)."
+            )
         except Exception:  # noqa: BLE001
             logger.exception("Unhandled error di restart")
-            return await status.edit_text("❌ Error internal. Cek log di server.")
+            return await status.edit_text(
+                "❌ Error internal. Cek log di Railway. "
+                "Kemungkinan selector website berubah / network timeout / OOM."
+            )
 
         if result.success:
             text = (
