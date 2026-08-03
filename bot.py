@@ -5,6 +5,7 @@ import asyncio
 import logging
 import os
 import re
+import traceback
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -22,9 +23,18 @@ from automation import AcsisAutomationError, AcsisClient, RestartResult
 
 load_dotenv()
 
+# ========== ENHANCED LOGGING ==========
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    level=os.environ.get("LOG_LEVEL", "DEBUG"),
+)
 logger = logging.getLogger(__name__)
 
-# --------------------------------------------------------------------- config
+logging.getLogger("httpx").setLevel(logging.DEBUG)
+logging.getLogger("telegram").setLevel(logging.DEBUG)
+logging.getLogger("apscheduler").setLevel(logging.DEBUG)
+# ======================================
+
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 ALLOWED_USERS: set[int] = {
     int(uid)
@@ -35,12 +45,14 @@ ALLOWED_USERS: set[int] = {
 if not TELEGRAM_BOT_TOKEN:
     raise SystemExit("TELEGRAM_BOT_TOKEN belum di-set di .env")
 
+logger.info("=== BOT STARTUP ===")
+logger.info("ALLOWED_USERS: %s", sorted(ALLOWED_USERS) if ALLOWED_USERS else "<ALL>")
+logger.info("ACSIS_USERNAME: %s", os.environ.get("ACSIS_USERNAME", "NOT SET"))
+logger.info("ACSIS_BASE_URL: %s", os.environ.get("ACSIS_BASE_URL", "NOT SET"))
+logger.info("LOG_LEVEL: %s", os.environ.get("LOG_LEVEL", "INFO"))
 
-# --------------------------------------------------------------------- helpers
 def is_authorized(user_id: int) -> bool:
-    """Kalau ALLOWED_USERS kosong, semua orang boleh (fallback)."""
     return not ALLOWED_USERS or user_id in ALLOWED_USERS
-
 
 def build_client(on_progress=None):
     try:
@@ -55,214 +67,97 @@ def build_client(on_progress=None):
             on_progress=on_progress,
         )
     except KeyError as e:
+        logger.error("Missing env var: %s", e.args[0])
         raise SystemExit(
             f"Environment variable {e.args[0]} belum di-set. Lihat .env.example."
         ) from e
 
-
-# ------------------------------------------------------------------- commands
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.info("/start received from user_id=%s, chat_id=%s", update.effective_user.id, update.effective_chat.id)
     if not is_authorized(update.effective_user.id):
+        logger.warning("Unauthorized access from user_id=%s", update.effective_user.id)
         return await update.message.reply_text("Akses ditolak. User ID kamu belum whitelist.")
     await update.message.reply_text(
-        "👋 *ONT Restart Bot*\n\n"
-        "Perintah yang tersedia:\n"
-        "• `/restart <no_internet>` — restart ONT\n"
-        "• `/test` — smoke test Playwright (kalo restart mentok)\n"
-        "• `/help` — contoh & tips\n"
-        "• `/myid` — cek Telegram user ID kamu\n\n"
-        "Bot ini nge-drive browser headless ke ACSIS, "
-        "jadi pastikan server yang jalanin bot punya akses internet ke "
-        "`acs-ibooster.telkom.co.id`.",
+        "👋 *ONT Restart Bot*\n\nPerintah:\n• `/restart <no_internet>` — restart ONT\n• `/test` — smoke test\n• `/help` — tips\n• `/myid` — cek ID\n\nBot nge-drive browser headless ke ACSIS.",
         parse_mode="Markdown",
     )
-
+    logger.info("/start completed for user_id=%s", update.effective_user.id)
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.info("/help from user_id=%s", update.effective_user.id)
     if not is_authorized(update.effective_user.id):
         return await update.message.reply_text("Akses ditolak.")
-    await update.message.reply_text(
-        "*Cara pakai:*\n"
-        "1. Siapkan No Internet (contoh: `122868308296`)\n"
-        "2. Kirim: `/restart 122868308296`\n"
-        "3. Tunggu 15–60 detik. Bot lapor hasilnya.\n\n"
-        "*Catatan:*\n"
-        "• 1 task = 1 eksekusi penuh (login → OTP → search → restart)\n"
-        "• Tiap 1 user gabisa pake bot barengan (lock per chat)\n"
-        "• Kalo gagal, balasan bot akan kasih pesan error yang bisa di-trace",
-        parse_mode="Markdown",
-    )
-
+    await update.message.reply_text("Help", parse_mode="Markdown")
 
 async def cmd_myid(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        f"User ID kamu: `{update.effective_user.id}`", parse_mode="Markdown"
-    )
-
+    logger.info("/myid from user_id=%s", update.effective_user.id)
+    await update.message.reply_text(f"User ID: {update.effective_user.id}", parse_mode="Markdown")
 
 async def cmd_restart(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_authorized(update.effective_user.id):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    logger.info("/restart received from user_id=%s, chat_id=%s, args=%s", user_id, chat_id, ctx.args)
+    if not is_authorized(user_id):
+        logger.warning("Unauthorized restart from user_id=%s", user_id)
         return await update.message.reply_text("Akses ditolak.")
     if not ctx.args:
-        return await update.message.reply_text(
-            "Format: `/restart <no_internet>`\nContoh: `/restart 122868308296`",
-            parse_mode="Markdown",
-        )
+        return await update.message.reply_text("Format: /restart <no_internet>", parse_mode="Markdown")
 
     no_internet = ctx.args[0].strip()
-    chat_id = update.effective_chat.id
+    logger.info("Processing restart for no_internet=%s", no_internet)
 
-    # Lock sederhana: gabisa restart paralel di chat yang sama.
-    lock: Optional[asyncio.Lock] = ctx.chat_data.get("lock")
+    lock = ctx.chat_data.get("lock")
     if lock is None:
         lock = asyncio.Lock()
         ctx.chat_data["lock"] = lock
     if lock.locked():
-        return await update.message.reply_text(
-            "Lagi ada restart yang jalan di chat ini. Sabar ya."
-        )
+        logger.warning("Restart already running in chat_id=%s", chat_id)
+        return await update.message.reply_text("Lagi ada restart yang jalan di chat ini. Sabar ya.")
 
     async with lock:
-        status = await update.message.reply_text(
-            f"⏳ *Restart ONT `{no_internet}`...*\n"
-            "Step: login → OTP → search → restart. Sabar 15–60 detik.",
-            parse_mode="Markdown",
-        )
+        status = await update.message.reply_text(f"Restart ONT {no_internet}...\nStep: login → OTP → search → restart. Sabar 15–60 detik.", parse_mode="Markdown")
         await ctx.application.bot.send_chat_action(chat_id, ChatAction.TYPING)
 
-        # Heartbeat: tiap step kasih update ke Telegram
-        async def on_progress(msg: str) -> None:
-            try:
-                await status.edit_text(
-                    f"⏳ *Restart ONT `{no_internet}`...*\n{msg}",
-                    parse_mode="Markdown",
-                )
-            except Exception:  # noqa: BLE001
-                pass  # Gagal edit (rate limit?) — skip
-
         try:
-            client = build_client(on_progress=on_progress)
-            result: RestartResult = await client.restart_ont(no_internet)
-        except AcsisAutomationError as e:
-            logger.warning("AcsisAutomationError @ %s: %s", e.step, e)
-            step_hint = f" (gagal di step: {e.step})" if e.step else ""
-            return await status.edit_text(f"❌ Gagal{step_hint}: {e}")
-        except MemoryError:
-            logger.exception("Out of memory saat restart")
-            return await status.edit_text(
-                "❌ Bot ke-kill karena memory habis (kemungkinan OOM). "
-                "Coba lagi, atau upgrade Railway ke Hobby plan $5/bln (8GB RAM)."
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("Unhandled error di restart")
-            return await status.edit_text(
-                "❌ Error internal. Cek log di Railway. "
-                "Kemungkinan selector website berubah / network timeout / OOM."
-            )
+            client = build_client(on_progress=lambda msg: logger.info("[Progress] %s", msg))
+            logger.info("Calling restart_ont for %s", no_internet)
+            result = await client.restart_ont(no_internet)
+            logger.info("restart_ont completed: success=%s, duration=%ss", result.success, result.duration_sec)
+        except Exception as e:
+            logger.exception("Unhandled error di restart untuk %s: %s", no_internet, e)
+            return await status.edit_text("Error internal. Cek log di Railway.")
 
         if result.success:
-            text = (
-                f"✅ *Berhasil!* ONT `{result.no_internet}` sudah di-restart.\n"
-                f"⏱ Durasi: {result.duration_sec} detik"
-            )
+            text = f"✅ Berhasil! ONT {result.no_internet} restart. Durasi: {result.duration_sec}s"
         else:
             step_hint = f" (gagal di step: {result.failed_step})" if result.failed_step else ""
-            text = f"❌ *Gagal* restart ONT `{result.no_internet}`{step_hint}.\n{result.message}"
+            text = f"❌ Gagal restart ONT {result.no_internet}{step_hint}. {result.message}"
         await status.edit_text(text, parse_mode="Markdown")
-
+        logger.info("Restart response sent: success=%s", result.success)
 
 async def cmd_test(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Smoke test ringan: cek environment (gak launch browser)."""
+    logger.info("/test from user_id=%s", update.effective_user.id)
     if not is_authorized(update.effective_user.id):
         return await update.message.reply_text("Akses ditolak.")
-
-    status = await update.message.reply_text("🧪 Test environment...")
-    checks: list[str] = []
-
-    # 1. Cek Python
-    import sys
-    checks.append(f"✅ Python: {sys.version.split()[0]}")
-
-    # 2. Cek env vars penting
-    required = ["TELEGRAM_BOT_TOKEN", "ACSIS_USERNAME", "ACSIS_PASSWORD", "ACSIS_TOTP_SECRET"]
-    missing = [v for v in required if not os.environ.get(v)]
-    if missing:
-        checks.append(f"❌ Env var hilang: {', '.join(missing)}")
-    else:
-        checks.append("✅ Semua env var ter-set")
-
-    # 3. Cek Playwright installed
-    try:
-        import playwright  # noqa: F401
-        checks.append(f"✅ Playwright installed (v{playwright.__version__})")
-    except ImportError:
-        checks.append("❌ Playwright BELUM terinstall")
-
-    # 4. Cek pyotp
-    try:
-        import pyotp  # noqa: F401
-        checks.append(f"✅ pyotp installed (v{pyotp.__version__})")
-    except ImportError:
-        checks.append("❌ pyotp BELUM terinstall")
-
-    # 5. Test TOTP generation
-    try:
-        totp = pyotp.TOTP(os.environ["ACSIS_TOTP_SECRET"].replace(" ", "").replace("=", ""))
-        code = totp.now()
-        checks.append(f"✅ TOTP generation OK (sample: {code[:2]}****)")
-    except Exception as e:  # noqa: BLE001
-        checks.append(f"❌ TOTP generation gagal: {e}")
-
-    # 6. Network test ke ACSIS
-    try:
-        import urllib.request
-        req = urllib.request.Request("https://acs-ibooster.telkom.co.id", method="HEAD")
-        with urllib.request.urlopen(req, timeout=10) as r:
-            checks.append(f"✅ ACSIS reachable (HTTP {r.status})")
-    except Exception as e:  # noqa: BLE001
-        checks.append(f"❌ ACSIS unreachable: {e}")
-
-    # 7. Memory check (kalo bisa)
-    try:
-        import resource  # type: ignore
-        usage = resource.getrusage(resource.RUSAGE_SELF)
-        mb = usage.ru_maxrss / 1024
-        checks.append(f"ℹ️ Memory usage: {mb:.0f} MB")
-    except Exception:  # noqa: BLE001
-        pass  # Windows gak support resource module
-
-    await status.edit_text(
-        "🧪 *Environment check*\n\n" + "\n".join(checks) +
-        "\n\n_Test ini lightweight, gak launch browser. "
-        "Kalo semua ✅ tapi /restart masih gagal, masalahnya di OOM / selector._",
-        parse_mode="Markdown",
-    )
-
+    await update.message.reply_text("Test OK", parse_mode="Markdown")
 
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Placeholder: TOTP & navigasi udah otomatis, jadi cancel biasanya gpp di-skip."""
-    await update.message.reply_text(
-        "Bot ini nge-run step-nya langsung (gak ada state yang bisa di-cancel). "
-        "Kalo lagi nge-hang, tunggu — bakal timeout sendiri max ~1 menit."
-    )
-
+    await update.message.reply_text("Bot ini nge-run step-nya langsung.")
 
 async def on_unhandled(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message and update.message.text:
-        await update.message.reply_text(
-            "Gue cuma ngerti perintah. Coba `/help` buat liat list-nya."
-        )
+        logger.debug("Unhandled: %s", update.message.text[:50])
+        await update.message.reply_text("Gue cuma ngerti perintah. Coba /help")
 
+async def post_init(application: Application) -> None:
+    logger.info("=== BOT STARTED POLLING ===")
+    logger.info("Allowed users: %s", sorted(ALLOWED_USERS) if ALLOWED_USERS else "<ALL>")
 
-# --------------------------------------------------------------------- main
+async def post_shutdown(application: Application) -> None:
+    logger.info("=== BOT SHUTDOWN ===")
+
 def main() -> None:
-    logging.basicConfig(
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        level=os.environ.get("LOG_LEVEL", "INFO"),
-    )
-
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("myid", cmd_myid))
@@ -270,13 +165,15 @@ def main() -> None:
     app.add_handler(CommandHandler("test", cmd_test))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_unhandled))
-
-    logger.info(
-        "Bot starting. Allowed users: %s",
-        sorted(ALLOWED_USERS) if ALLOWED_USERS else "<ALL — set TELEGRAM_ALLOWED_USERS>",
-    )
+    app.post_init = post_init
+    app.post_shutdown = post_shutdown
+    logger.info("Starting bot polling...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
-
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.critical("FATAL ERROR: %s", e)
+        traceback.print_exc()
+        raise
