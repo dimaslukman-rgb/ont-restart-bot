@@ -99,6 +99,8 @@ class AcsisClient:
                     "--no-first-run",
                     "--no-zygote",
                     "--single-process",  # Hemat ~30% memory (trade-off: kurang stabil)
+                    "--proxy-server='direct://'",
+                    "--proxy-bypass-list=*",
                 ],
             )
             try:
