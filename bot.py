@@ -24,15 +24,18 @@ from automation import AcsisAutomationError, AcsisClient, RestartResult
 load_dotenv()
 
 # ========== ENHANCED LOGGING ==========
+# Default INFO (bukan DEBUG): Railway log gampang kebanjiran 15+ baris DEBUG
+# dari polling getUpdates tiap 10 detik, jadi error asli ketutupan.
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    level=os.environ.get("LOG_LEVEL", "DEBUG"),
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
 )
 logger = logging.getLogger(__name__)
 
-logging.getLogger("httpx").setLevel(logging.DEBUG)
-logging.getLogger("telegram").setLevel(logging.DEBUG)
-logging.getLogger("apscheduler").setLevel(logging.DEBUG)
+# Library HTTP/Telegram: cukup WARNING. DEBUG-nya cuma spam
+# "No new updates found." tiap polling — gak nambah info debugging apa-apa.
+for _noisy_logger in ("httpx", "httpcore", "telegram", "apscheduler"):
+    logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
 # ======================================
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -123,9 +126,13 @@ async def cmd_restart(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             logger.info("Calling restart_ont for %s", no_internet)
             result = await client.restart_ont(no_internet)
             logger.info("restart_ont completed: success=%s, duration=%ss", result.success, result.duration_sec)
+        except AcsisAutomationError as e:
+            logger.exception("Automation error di restart untuk %s: %s", no_internet, e)
+            step_hint = f" (step: {e.step})" if e.step else ""
+            return await status.edit_text(f"❌ Gagal{step_hint}: {e}. Cek log Railway.")
         except Exception as e:
             logger.exception("Unhandled error di restart untuk %s: %s", no_internet, e)
-            return await status.edit_text("Error internal. Cek log di Railway.")
+            return await status.edit_text(f"Error internal: {e}. Cek log di Railway.")
 
         if result.success:
             text = f"✅ Berhasil! ONT {result.no_internet} restart. Durasi: {result.duration_sec}s"
