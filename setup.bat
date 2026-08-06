@@ -67,6 +67,6 @@ start "" /min "%~dp0start_bot.bat"
 echo.
 echo Setup selesai! Bot jalan di window "ONT Restart Bot".
 echo Cek status: kirim /start ke bot kamu di Telegram.
-echo Log: bot.log   |   Health check: healthcheck.bat (tiap 5 menit via task).
+echo Log: bot.log   ^|   Health check: healthcheck.bat (tiap 5 menit via task).
 echo.
 pause

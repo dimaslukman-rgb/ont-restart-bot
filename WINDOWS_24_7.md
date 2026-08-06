@@ -83,11 +83,13 @@ Mendaftarkan:
 - `ONT Restart Bot` — jalan saat user login
 - `ONT Restart Bot Health` — watchdog tiap 5 menit
 
-**Opsi B — Startup folder (tanpa admin, tanpa watchdog):**
+> 💡 **Tanpa admin?** Task `ONLOGON` butuh hak admin. Kalau `install_task.bat` ditolak ("Access is denied"), dia **otomatis fallback ke Startup folder** buat auto-start — watchdog `Health` (tiap 5 menit, tanpa admin) tetap terdaftar. Jadi kombinasi final: Startup shortcut (auto-start saat login) + Task Scheduler (watchdog).
+
+**Opsi B — Startup folder (manual, tanpa admin, tanpa watchdog):**
 ```bash
 install_startup.bat
 ```
-Bikin shortcut minimized di Startup folder. Bot auto-start saat login, crash-restart tetap jalan (lewat loop `start_bot.bat`), tapi watchdog tiap 5 menit tidak aktif.
+Bikin shortcut minimized di Startup folder. Bot auto-start saat login, crash-restart tetap jalan (lewat loop `start_bot.bat`), tapi watchdog tiap 5 menit tidak aktif (kecuali kamu jalanin `install_task.bat` juga buat task Health-nya).
 
 **Hapus semuanya:**
 ```bash

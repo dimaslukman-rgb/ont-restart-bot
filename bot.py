@@ -181,8 +181,10 @@ async def post_init(application: Application) -> None:
     logger.info("=== BOT STARTED POLLING ===")
     logger.info("Allowed users: %s", sorted(ALLOWED_USERS) if ALLOWED_USERS else "<ALL>")
     # Heartbeat tiap 60 detik — dipakai healthcheck.bat buat deteksi bot hang/mati.
+    # Pakai asyncio.create_task (bukan application.create_task): yang kedua nge-warning
+    # "Tasks created while the application is not running won't be awaited" di PTB 21+.
     _write_heartbeat()
-    application.create_task(_heartbeat_loop())
+    asyncio.create_task(_heartbeat_loop())
 
 async def post_shutdown(application: Application) -> None:
     logger.info("=== BOT SHUTDOWN ===")

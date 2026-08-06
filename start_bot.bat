@@ -29,7 +29,7 @@ if not errorlevel 1 (
 
 echo [%date% %time%] ============================================
 echo [%date% %time%]  ONT Restart Bot dimulai...
-echo [%date% %time%]  Log: bot.log  |  Heartbeat: bot_heartbeat.txt
+echo [%date% %time%]  Log: bot.log  ^|  Heartbeat: bot_heartbeat.txt
 echo [%date% %time%] ============================================
 
 :loop
