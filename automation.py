@@ -266,10 +266,23 @@ class AcsisClient:
         await page.get_by_role("button", name=re.compile(r"^Login$", re.I)).click()
         await self._maybe_screenshot(page, "02_after_login_click")
 
-        # Tunggu redirect ke /otp
+        # Tunggu redirect ke /otp, tapi deteksi pesan error login biar
+        # Telegram langsung bilang masalahnya (password salah / kesuspend).
         try:
-            await page.wait_for_url(re.compile(r"/otp($|\?)"), timeout=15_000)
+            await page.wait_for_url(re.compile(r"/otp($|\?)"), timeout=8_000)
         except PlaywrightTimeoutError as e:
+            body = await page.evaluate("document.body.innerText")
+            if "salah 3x" in body or "suspend" in body.lower():
+                raise AcsisAutomationError(
+                    "Akun ACSIS kesuspend: password salah 3x (lockout 10 menit). "
+                    "Tunggu 10 menit, pastikan ACSIS_PASSWORD di .env benar.",
+                    step="login",
+                ) from e
+            if "NIK atau Password" in body or "Gagal" in body:
+                raise AcsisAutomationError(
+                    "Login ditolak ACSIS: cek ACSIS_USERNAME / ACSIS_PASSWORD di .env.",
+                    step="login",
+                ) from e
             raise AcsisAutomationError(
                 "Gagal masuk ke halaman OTP. Cek username/password/dropdown.",
                 step="login",
