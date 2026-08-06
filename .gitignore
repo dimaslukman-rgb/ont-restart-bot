@@ -9,3 +9,7 @@ env/
 .vscode/
 *.log
 screenshots/
+
+# Runtime artifacts (Windows 24/7 setup)
+bot_heartbeat.txt
+bot.log.old

@@ -5,6 +5,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 import traceback
 from typing import Optional
 
@@ -56,6 +57,26 @@ logger.info("LOG_LEVEL: %s", os.environ.get("LOG_LEVEL", "INFO"))
 
 def is_authorized(user_id: int) -> bool:
     return not ALLOWED_USERS or user_id in ALLOWED_USERS
+
+
+# ========== HEARTBEAT (buat healthcheck.bat) ==========
+HEARTBEAT_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "bot_heartbeat.txt"
+)
+
+
+def _write_heartbeat() -> None:
+    try:
+        with open(HEARTBEAT_FILE, "w", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S"))
+    except Exception:  # noqa: BLE001
+        logger.exception("Gagal nulis heartbeat")
+
+
+async def _heartbeat_loop() -> None:
+    while True:
+        _write_heartbeat()
+        await asyncio.sleep(60)
 
 def build_client(on_progress=None):
     try:
@@ -159,6 +180,9 @@ async def on_unhandled(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def post_init(application: Application) -> None:
     logger.info("=== BOT STARTED POLLING ===")
     logger.info("Allowed users: %s", sorted(ALLOWED_USERS) if ALLOWED_USERS else "<ALL>")
+    # Heartbeat tiap 60 detik — dipakai healthcheck.bat buat deteksi bot hang/mati.
+    _write_heartbeat()
+    application.create_task(_heartbeat_loop())
 
 async def post_shutdown(application: Application) -> None:
     logger.info("=== BOT SHUTDOWN ===")

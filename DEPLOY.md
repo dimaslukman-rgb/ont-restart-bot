@@ -46,13 +46,13 @@ Di Railway dashboard → service kamu → tab **Variables**, tambahin satu-satu:
 
 | Variable | Value |
 |---|---|
-| `TELEGRAM_BOT_TOKEN` | `8949804444:AAErz4aQGMfcRlmG3Ndg6ifZpvYlTthMC10` |
+| `TELEGRAM_BOT_TOKEN` | `<token dari @BotFather>` |
 | `TELEGRAM_ALLOWED_USERS` | Telegram user ID Pak Boss (chat `/myid` di bot lokal dulu buat tau) |
 | `ACSIS_BASE_URL` | `https://acs-ibooster.telkom.co.id` |
-| `ACSIS_USERNAME` | `16871006` |
+| `ACSIS_USERNAME` | `<username ACSIS>` |
 | `ACSIS_PASSWORD` | password ACSIS Pak Boss |
 | `ACSIS_LOGIN_OPTION` | `Telkom Akses` |
-| `ACSIS_TOTP_SECRET` | `FFXGO3CRPIZGYWTYJBXTM53QFJISIOLXIM3VCKRIHZ2FIPDXHBSQ` |
+| `ACSIS_TOTP_SECRET` | `<secret TOTP>` |
 | `LOG_LEVEL` | `INFO` |
 | `ACSIS_HEADLESS` | `true` |
 | `DEBUG_SCREENSHOT_DIR` | kosongkan (gak kepake di production) |

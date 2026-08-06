@@ -38,7 +38,7 @@ Copy `.env.example` ke `.env`, lalu isi:
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | Token dari `@BotFather` (sudah diisi) |
 | `TELEGRAM_ALLOWED_USERS` | User ID Telegram yang boleh pake (spasi-separated). Pakai `/myid` di bot buat tau ID kamu. |
-| `ACSIS_USERNAME` | Username ACSIS (sudah terisi: `16871006`) |
+| `ACSIS_USERNAME` | Username ACSIS (isi username kamu) |
 | `ACSIS_PASSWORD` | **Wajib diisi** — password login ACSIS |
 | `ACSIS_LOGIN_OPTION` | Sudah `Telkom Akses` |
 | `ACSIS_TOTP_SECRET` | Sudah terisi hasil decode dari QR Google Authenticator |
@@ -107,6 +107,10 @@ ont-restart-bot/
 Kalo ada masalah, set `DEBUG_SCREENSHOT_DIR=./screenshots` di `.env` biar bot nyimpen screenshot tiap step. Cek file `final.png` dan `*.png` lain di folder itu.
 
 ---
+
+## Jalankan 24/7 di PC Windows
+
+Karena `acs-ibooster.telkom.co.id` cuma resolve di jaringan Telkom (DNS internal), bot **wajib** jalan dari dalam jaringan Telkom — Railway/cloud publik gak bisa. Panduan lengkap (auto-start, watchdog, panduan `.env`): **[WINDOWS_24_7.md](WINDOWS_24_7.md)** — cukup jalankan `setup.bat` sekali.
 
 ## Deploy 24/7
 
