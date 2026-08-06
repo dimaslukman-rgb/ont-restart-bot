@@ -81,45 +81,78 @@ class AcsisClient:
 
         started = time.monotonic()
         dialogs: list[str] = []
+        logger.info(
+            "=== Starting Playwright automation (no_internet=%s, headless=%s) ===",
+            no_internet,
+            self.headless,
+        )
+
         async with async_playwright() as p:
-            # Memory-efficient Chromium launch. Railway free tier = 512 MB,
-            # Playwright default args bisa spike 800 MB+ dan OOM-kill.
-            browser: Browser = await p.chromium.launch(
-                headless=self.headless,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",  # /dev/shm kecil di container
-                    "--disable-gpu",
-                    "--disable-software-rasterizer",
-                    "--disable-extensions",
-                    "--disable-background-networking",
-                    "--disable-default-apps",
-                    "--disable-sync",
-                    "--disable-translate",
-                    "--no-first-run",
-                    "--no-zygote",
-                    "--single-process",  # Hemat ~30% memory (trade-off: kurang stabil)
-                    "--proxy-server='direct://'",
-                    "--proxy-bypass-list=*",
-                ],
-            )
+            logger.info("Playwright siap - launch Chromium...")
+            self._log_memory("sebelum launch")
+            try:
+                # Memory-efficient Chromium launch. Railway free tier = 512 MB,
+                # Playwright default args bisa spike 800 MB+ dan OOM-kill.
+                browser = await p.chromium.launch(
+                    headless=self.headless,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",  # /dev/shm kecil di container
+                        "--disable-gpu",
+                        "--disable-software-rasterizer",
+                        "--disable-extensions",
+                        "--disable-background-networking",
+                        "--disable-default-apps",
+                        "--disable-sync",
+                        "--disable-translate",
+                        "--no-first-run",
+                        "--no-zygote",
+                        "--single-process",  # Hemat ~30% memory (trade-off: kurang stabil)
+                        "--proxy-server='direct://'",
+                        "--proxy-bypass-list=*",
+                    ],
+                )
+                logger.info("Chromium berhasil diluncurkan.")
+                self._log_memory("sesudah launch")
+            except Exception as e:  # noqa: BLE001
+                raise AcsisAutomationError(
+                    f"Gagal launch Chromium (kemungkinan OOM): {e}", step="launch"
+                ) from e
+
+            context: Optional[BrowserContext] = None
+            page: Optional[Page] = None
             try:
                 context = await self._new_context(browser)
+                logger.info("Browser context OK.")
                 page = await context.new_page()
+                logger.info(
+                    "Page OK - set default timeout %sms.", self.DEFAULT_TIMEOUT_MS
+                )
+                page.set_default_timeout(self.DEFAULT_TIMEOUT_MS)
+                page.set_default_navigation_timeout(self.DEFAULT_TIMEOUT_MS)
                 self._wire_dialog_handler(page, dialogs)
+                logger.info("Dialog handler aktif.")
 
-                try:
-                    await self._login(page)
-                    await self._submit_otp(page)
-                    await self._search_internet(page, no_internet)
-                    await self._trigger_restart(page, dialogs)
-                finally:
+                logger.info("[step 1/4] Login...")
+                await self._login(page)
+                logger.info("[step 1/4] Login selesai.")
+                logger.info("[step 2/4] Submit OTP...")
+                await self._submit_otp(page)
+                logger.info("[step 2/4] OTP selesai.")
+                logger.info("[step 3/4] Search ONT...")
+                await self._search_internet(page, no_internet)
+                logger.info("[step 3/4] Search selesai.")
+                logger.info("[step 4/4] Trigger restart...")
+                await self._trigger_restart(page, dialogs)
+                logger.info("[step 4/4] Restart selesai.")
+            finally:
+                if page is not None:
                     await self._maybe_screenshot(page, "final")
+                if context is not None:
                     try:
                         await context.close()
                     except Exception:  # noqa: BLE001
                         logger.warning("Gagal close context (mungkin udah crash)")
-            finally:
                 try:
                     await browser.close()
                 except Exception:  # noqa: BLE001
@@ -127,6 +160,13 @@ class AcsisClient:
 
         duration = time.monotonic() - started
         gc.collect()  # Force GC buat release memory sebelum exit
+        self._log_memory("final")
+        logger.info(
+            "=== Automation selesai: %.1fs, %d dialog, success=%s ===",
+            duration,
+            len(dialogs),
+            any(re.search(r"Berhasil", d, re.I) for d in dialogs),
+        )
         return self._interpret(no_internet, dialogs, duration)
 
     # ------------------------------------------------------------------ helpers
@@ -143,6 +183,20 @@ class AcsisClient:
         )
 
     @staticmethod
+    def _log_memory(label: str) -> None:
+        """Log RSS memory (KB) biar bisa deteksi OOM pressure di Railway."""
+        try:
+            import resource
+            import sys
+
+            rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            if sys.platform == "darwin":
+                rss_kb //= 1024  # macOS: bytes; Linux: KB
+            logger.info("[mem:%s] max RSS ~%.1f MB", label, rss_kb / 1024.0)
+        except Exception:  # noqa: BLE001
+            logger.debug("resource module gak tersedia di platform ini")
+
+    @staticmethod
     def _wire_dialog_handler(page: Page, dialogs: list[str]) -> None:
         async def handler(dialog) -> None:
             msg = dialog.message or ""
@@ -157,8 +211,9 @@ class AcsisClient:
 
     async def _login(self, page: Page) -> None:
         self.on_progress("🔐 Membuka halaman login...")
-        logger.info("Membuka halaman login...")
+        logger.info("Membuka halaman login: %s/login", self.base_url)
         await page.goto(f"{self.base_url}/login", wait_until="domcontentloaded")
+        logger.info("Halaman login termuat.")
         await self._maybe_screenshot(page, "01_login")
 
         # Username: input teks pertama yang visible (yang ada icon orang).
