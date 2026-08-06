@@ -227,23 +227,40 @@ class AcsisClient:
         # Password
         await page.locator('input[type="password"]:visible').first.fill(self.password)
 
-        # Dropdown role: pilih berdasarkan label visible.
-        select = page.locator("select:visible").first
-        await select.wait_for(state="visible", timeout=10_000)
-        # Coba beberapa strategi select
+        # Dropdown role pakai Semantic UI: <select> aslinya display:none (cuma
+        # sumber data), yang kelihatan cuma div.ui.dropdown + .menu .item.
+        # Cara bener: klik dropdown-nya, lalu klik item menu yang cocok.
+        dropdown = page.locator("div.ui.dropdown").first
+        await dropdown.wait_for(state="visible", timeout=10_000)
+        await dropdown.click()
+        # Cari <option> yang text-nya match login_option, ambil value-nya (mis. 'sso').
         try:
-            await select.select_option(label=self.login_option)
+            matched_value = await page.eval_on_selector(
+                "select[name='jenis']",
+                """(el, label) => {
+                    const opt = [...el.options].find(
+                        o => o.text.trim().toLowerCase() === String(label).trim().toLowerCase()
+                    );
+                    return opt ? opt.value : null;
+                }""",
+                self.login_option,
+            )
         except Exception:  # noqa: BLE001
-            try:
-                await select.select_option(value=self.login_option)
-            except Exception:  # noqa: BLE001
-                # Fallback: cari <option> dengan text match
-                await page.locator(
-                    f"select option:has-text(\"{self.login_option}\")"
-                ).first.evaluate(
-                    "(el, sel) => { el.value = sel; el.dispatchEvent(new Event('change', {bubbles:true})); }",
-                    self.login_option,
-                )
+            matched_value = None
+
+        if matched_value:
+            await page.locator(
+                f"div.ui.dropdown .menu .item[data-value='{matched_value}']"
+            ).first.click()
+        else:
+            # Fallback: item yang text-nya mengandung login_option.
+            await page.locator(
+                f"div.ui.dropdown .menu .item:has-text('{self.login_option}')"
+            ).first.click()
+        # Verifikasi pilihan masuk ke .text (Semantic UI ngupdate div.text).
+        await dropdown.locator("> .text").get_by_text(
+            self.login_option, exact=False
+        ).first.wait_for(state="visible", timeout=5_000)
 
         # Klik tombol Login (warna merah, persis "Login").
         await page.get_by_role("button", name=re.compile(r"^Login$", re.I)).click()

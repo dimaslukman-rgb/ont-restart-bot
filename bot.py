@@ -150,10 +150,10 @@ async def cmd_restart(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except AcsisAutomationError as e:
             logger.exception("Automation error di restart untuk %s: %s", no_internet, e)
             step_hint = f" (step: {e.step})" if e.step else ""
-            return await status.edit_text(f"❌ Gagal{step_hint}: {e}. Cek log Railway.")
+            return await status.edit_text(f"❌ Gagal{step_hint}: {e}. Cek bot.log di PC.")
         except Exception as e:
             logger.exception("Unhandled error di restart untuk %s: %s", no_internet, e)
-            return await status.edit_text(f"Error internal: {e}. Cek log di Railway.")
+            return await status.edit_text(f"Error internal: {e}. Cek bot.log di PC.")
 
         if result.success:
             text = f"✅ Berhasil! ONT {result.no_internet} restart. Durasi: {result.duration_sec}s"
